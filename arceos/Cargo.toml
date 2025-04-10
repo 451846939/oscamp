@@ -91,5 +91,9 @@ axtask = { path = "modules/axtask" }
 axdma = { path = "modules/axdma" }
 elf = { path = "modules/elf" }
 
+[patch.crates-io]
+#kernel_guard = { path = "../../kernel_guard" }
+kernel_guard = { git="https://github.com/451846939/kernel_guard.git" ,branch = "fix_asm_const" }
+#kernel_guard = { version = "0.1.1" }
 [profile.release]
 lto = true
