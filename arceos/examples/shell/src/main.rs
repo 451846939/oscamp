@@ -4,6 +4,7 @@
 #[macro_use]
 #[cfg(feature = "axstd")]
 extern crate axstd as std;
+extern crate alloc;
 
 macro_rules! path_to_str {
     ($path:expr) => {{

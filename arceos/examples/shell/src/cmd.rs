@@ -1,3 +1,4 @@
+use alloc::string::ToString;
 use std::fs::{self, File, FileType};
 use std::io::{self, prelude::*};
 use std::{string::String, vec::Vec};
@@ -27,6 +28,8 @@ const CMD_TABLE: &[(&str, CmdHandler)] = &[
     ("pwd", do_pwd),
     ("rm", do_rm),
     ("uname", do_uname),
+    ("mv", do_mv),
+    ("rename", do_rename),
 ];
 
 fn file_type_to_char(ty: FileType) -> char {
@@ -290,4 +293,76 @@ fn split_whitespace(str: &str) -> (&str, &str) {
     let str = str.trim();
     str.find(char::is_whitespace)
         .map_or((str, ""), |n| (&str[..n], str[n + 1..].trim()))
+}
+
+
+fn do_mv(args: &str) {
+    let (src, dst) = split_whitespace(args);
+    if src.is_empty() || dst.is_empty() {
+        print_err!("mv", "missing file operand");
+        return;
+    }
+
+    let dst_path = match fs::metadata(dst) {
+        Ok(meta) if meta.is_dir() => {
+            let file_name = src.rsplit('/').next().unwrap_or(src);
+            format!("{}/{}", dst, file_name)
+        }
+        _ => dst.to_string(),
+    };
+
+    match fs::rename(src, &dst_path) {
+        Ok(_) => return,
+        Err(_) => {
+            if let Err(e) = mv_fallback(src, &dst_path) {
+                print_err!("mv", format_args!("{src} -> {dst_path}"), e);
+            }
+        }
+    }
+}
+
+fn mv_fallback(src: &str, dst: &str) -> fs::io::Result<()> {
+    let metadata = fs::metadata(src)?;
+    if metadata.is_dir() {
+        move_dir_recursive(src, dst)?;
+        fs::remove_dir(src)?;
+    } else {
+        let data = fs::read(src)?;
+        fs::write(dst, data)?;
+        fs::remove_file(src)?;
+    }
+    Ok(())
+}
+
+fn move_dir_recursive(src: &str, dst: &str) -> fs::io::Result<()> {
+    fs::create_dir(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let src_path = format!("{}/{}", src, file_name);
+        let dst_path = format!("{}/{}", dst, file_name);
+        let meta = fs::metadata(&src_path)?;
+        if meta.is_dir() {
+            move_dir_recursive(&src_path, &dst_path)?;
+            fs::remove_dir(&src_path)?;
+        } else {
+            let content = fs::read(&src_path)?;
+            fs::write(&dst_path, content)?;
+            fs::remove_file(&src_path)?;
+        }
+    }
+    Ok(())
+}
+
+
+
+fn do_rename(args: &str) {
+    let (src, dst) = split_whitespace(args);
+    if src.is_empty() || dst.is_empty() {
+        print_err!("rename", "missing file operand");
+        return;
+    }
+    if let Err(e) = fs::rename(src, dst) {
+        print_err!("rename", format_args!("{src} -> {dst}"), e);
+    }
 }

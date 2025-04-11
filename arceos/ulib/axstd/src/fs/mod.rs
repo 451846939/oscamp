@@ -3,7 +3,7 @@
 mod dir;
 mod file;
 
-use crate::io::{self, prelude::*};
+pub use crate::io::{self, prelude::*};
 
 #[cfg(feature = "alloc")]
 use alloc::{string::String, vec::Vec};
