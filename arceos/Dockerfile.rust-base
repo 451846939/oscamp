@@ -1,0 +1,30 @@
+FROM debian:bullseye-slim
+
+ENV RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo \
+    PATH=/opt/cargo/bin:$PATH
+
+# 添加 rust + rust-objcopy + riscv64-linux-musl 工具链 + 挂载和 ext4 支持
+RUN echo 'Acquire::AllowInsecureRepositories "true";' > /etc/apt/apt.conf.d/99insecure \
+    && apt-get update && apt-get install -y \
+        curl build-essential ca-certificates git wget xz-utils \
+        e2fsprogs util-linux \
+    && curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain nightly-2024-08-27 \
+    && rustup component add rust-src clippy rustfmt llvm-tools-preview \
+    && rustup target add \
+        x86_64-unknown-none \
+        riscv64gc-unknown-none-elf \
+        aarch64-unknown-none \
+        aarch64-unknown-none-softfloat \
+    && ln -s $(rustc --print sysroot)/lib/rustlib/*/bin/llvm-objcopy /usr/local/bin/rust-objcopy \
+    && wget https://musl.cc/riscv64-linux-musl-cross.tgz \
+    && tar -xzf riscv64-linux-musl-cross.tgz -C /opt/ \
+    && ln -s /opt/riscv64-linux-musl-cross/bin/* /usr/local/bin/ \
+    && rm riscv64-linux-musl-cross.tgz \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 用于缓存 Rust registry 和 git 数据
+VOLUME ["/opt/cargo/registry", "/opt/cargo/git"]
+
+WORKDIR /project
+CMD ["/bin/bash"]
