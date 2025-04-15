@@ -1,13 +1,17 @@
 #![allow(dead_code)]
 
-use core::ffi::{c_void, c_char, c_int};
+use crate::USER_STACK_SIZE;
+use arceos_posix_api as api;
+use arceos_posix_api::get_file_like;
+use axerrno::{ax_err, LinuxError};
 use axhal::arch::TrapFrame;
-use axhal::trap::{register_trap_handler, SYSCALL};
-use axerrno::LinuxError;
+use axhal::paging::MappingFlags;
+use axhal::trap::{register_trap_handler, PAGE_FAULT, SYSCALL};
 use axtask::current;
 use axtask::TaskExtRef;
-use axhal::paging::MappingFlags;
-use arceos_posix_api as api;
+use core::ffi::{c_char, c_int, c_void};
+use linkme::distributed_slice;
+use memory_addr::{is_aligned_4k, MemoryAddr, VirtAddr, VirtAddrRange, PAGE_SIZE_4K};
 
 const SYS_IOCTL: usize = 29;
 const SYS_OPENAT: usize = 56;
@@ -100,9 +104,14 @@ bitflags::bitflags! {
 fn handle_syscall(tf: &TrapFrame, syscall_num: usize) -> isize {
     ax_println!("handle_syscall [{}] ...", syscall_num);
     let ret = match syscall_num {
-         SYS_IOCTL => sys_ioctl(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _) as _,
+        SYS_IOCTL => sys_ioctl(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _) as _,
         SYS_SET_TID_ADDRESS => sys_set_tid_address(tf.arg0() as _),
-        SYS_OPENAT => sys_openat(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _, tf.arg3() as _),
+        SYS_OPENAT => sys_openat(
+            tf.arg0() as _,
+            tf.arg1() as _,
+            tf.arg2() as _,
+            tf.arg3() as _,
+        ),
         SYS_CLOSE => sys_close(tf.arg0() as _),
         SYS_READ => sys_read(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _),
         SYS_WRITE => sys_write(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _),
@@ -110,11 +119,11 @@ fn handle_syscall(tf: &TrapFrame, syscall_num: usize) -> isize {
         SYS_EXIT_GROUP => {
             ax_println!("[SYS_EXIT_GROUP]: system is exiting ..");
             axtask::exit(tf.arg0() as _)
-        },
+        }
         SYS_EXIT => {
             ax_println!("[SYS_EXIT]: system is exiting ..");
             axtask::exit(tf.arg0() as _)
-        },
+        }
         SYS_MMAP => sys_mmap(
             tf.arg0() as _,
             tf.arg1() as _,
@@ -138,9 +147,59 @@ fn sys_mmap(
     prot: i32,
     flags: i32,
     fd: i32,
-    _offset: isize,
+    offset: isize,
 ) -> isize {
-    unimplemented!("no sys_mmap!");
+    // 获取当前进程地址空间
+    let binding = current();
+
+    let mut aspace = binding.task_ext().aspace.lock();
+
+    // 分配空闲虚拟地址
+    let vaddr = match aspace.find_free_area(
+        VirtAddr::from(addr as usize),
+        length,
+        VirtAddrRange::from_start_size(aspace.base(), aspace.size()),
+    ) {
+        Some(base) => base,
+        None => return -1,
+    };
+
+    // 设置权限
+    let prot_flags = MmapProt::from_bits_truncate(prot);
+    let mut map_flags = MappingFlags::USER;
+
+    if prot_flags.contains(MmapProt::PROT_READ) {
+        map_flags |= MappingFlags::READ;
+    }
+    if prot_flags.contains(MmapProt::PROT_WRITE) {
+        map_flags |= MappingFlags::WRITE;
+    }
+    if prot_flags.contains(MmapProt::PROT_EXEC) {
+        map_flags |= MappingFlags::EXECUTE;
+    }
+
+    let aligned_len = (length + PAGE_SIZE_4K - 1) & !(PAGE_SIZE_4K - 1);
+    let hint = if addr.is_null() {
+        aspace.base()
+    } else {
+        VirtAddr::from(addr as usize)
+    };
+
+    // 获取文件
+    let file_obj = match get_file_like(fd) {
+        Ok(f) => f,
+        Err(_) => return -1,
+    };
+
+    let reader = alloc::sync::Arc::new(move |_offset: usize, buf: &mut [u8]| {
+        file_obj.read(buf).is_ok()
+    });
+
+    if let Err(e) = aspace.mmap_file(vaddr, aligned_len, map_flags, offset as usize, reader) {
+        return -1;
+    }
+
+    vaddr.as_usize() as isize
 }
 
 fn sys_openat(dfd: c_int, fname: *const c_char, flags: c_int, mode: api::ctypes::mode_t) -> isize {
@@ -173,4 +232,26 @@ fn sys_set_tid_address(tid_ptd: *const i32) -> isize {
 fn sys_ioctl(_fd: i32, _op: usize, _argp: *mut c_void) -> i32 {
     ax_println!("Ignore SYS_IOCTL");
     0
+}
+
+#[distributed_slice(PAGE_FAULT)]
+fn handle_user_page_fault(vaddr: VirtAddr, access: MappingFlags, is_user: bool) -> bool {
+    if !is_user {
+        ax_println!("[KERNEL PAGE FAULT] @ {:?}, access = {:?}", vaddr, access);
+        return false;
+    }
+
+    let task = current();
+    let mut aspace = task.task_ext().aspace.lock();
+
+    if aspace.handle_page_fault(vaddr, access) {
+        ax_println!("[User Page Fault Handled] @ {:?}", vaddr);
+        true
+    } else {
+        ax_println!(
+            "Failed to handle user page fault at {:?}, shutting down...",
+            vaddr
+        );
+        axtask::exit(-1);
+    }
 }

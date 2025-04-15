@@ -1,5 +1,9 @@
 use core::fmt;
 
+use crate::backend::Backend;
+use crate::mapping_err_to_ax_err;
+use crate::paging_err_to_ax_err;
+use alloc::vec::Vec;
 use axerrno::{ax_err, AxError, AxResult};
 use axhal::{
     mem::phys_to_virt,
@@ -9,10 +13,6 @@ use memory_addr::{
     is_aligned_4k, pa, MemoryAddr, PageIter4K, PhysAddr, VirtAddr, VirtAddrRange, PAGE_SIZE_4K,
 };
 use memory_set::{MemoryArea, MemorySet};
-use crate::backend::Backend;
-use crate::paging_err_to_ax_err;
-use crate::mapping_err_to_ax_err;
-use alloc::vec::Vec;
 
 /// The virtual memory address space.
 pub struct AddrSpace {
@@ -155,6 +155,20 @@ impl AddrSpace {
         self.areas
             .map(area, &mut self.pt, false)
             .map_err(mapping_err_to_ax_err)?;
+        Ok(())
+    }
+
+    pub fn mmap_file(
+        &mut self,
+        vaddr: VirtAddr,
+        length: usize,
+        prot: MappingFlags,
+        file_offset: usize,
+        reader: alloc::sync::Arc<dyn Fn(usize, &mut [u8]) -> bool + Send + Sync>,
+    ) -> AxResult {
+        let backend = Backend::new_file_backed(reader, file_offset, vaddr);
+        let area = MemoryArea::new(vaddr, length, prot, backend);
+        self.areas.map(area, &mut self.pt, false).map_err(mapping_err_to_ax_err)?;
         Ok(())
     }
 

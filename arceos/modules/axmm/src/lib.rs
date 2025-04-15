@@ -1,7 +1,7 @@
 //! [ArceOS](https://github.com/arceos-org/arceos) memory management module.
 
 #![no_std]
-
+#![feature(trait_alias)]
 #[macro_use]
 extern crate log;
 extern crate alloc;
@@ -90,3 +90,9 @@ pub fn init_memory_management() {
 pub fn init_memory_management_secondary() {
     unsafe { axhal::arch::write_page_table_root(kernel_page_table_root()) };
 }
+
+/// Abstract file reader (no dependency on FileLike).
+///
+/// It is implemented by the upper layer to provide file page loading logic.
+/// A trait alias for closure-style mmap reader
+pub trait MmapReadFn = Fn(usize, &mut [u8]) -> bool + Send + Sync;

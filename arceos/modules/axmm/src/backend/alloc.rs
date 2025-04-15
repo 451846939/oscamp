@@ -5,7 +5,7 @@ use memory_addr::{PageIter4K, PhysAddr, VirtAddr, PAGE_SIZE_4K};
 
 use super::Backend;
 
-fn alloc_frame(zeroed: bool) -> Option<PhysAddr> {
+pub fn alloc_frame(zeroed: bool) -> Option<PhysAddr> {
     let vaddr = VirtAddr::from(global_allocator().alloc_pages(1, PAGE_SIZE_4K).ok()?);
     if zeroed {
         unsafe { core::ptr::write_bytes(vaddr.as_mut_ptr(), 0, PAGE_SIZE_4K) };
