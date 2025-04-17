@@ -1,9 +1,10 @@
 use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use alloc::{string::String, vec::Vec};
-
+use alloc::string::ToString;
 use axfs_vfs::{VfsDirEntry, VfsNodeAttr, VfsNodeOps, VfsNodeRef, VfsNodeType};
 use axfs_vfs::{VfsError, VfsResult};
+use axfs_vfs::__priv::ax_err;
 use spin::RwLock;
 
 use crate::file::FileNode;
@@ -66,6 +67,14 @@ impl DirNode {
         }
         children.remove(name);
         Ok(())
+    }
+
+    pub fn get_root(self: Arc<Self>) -> VfsNodeRef {
+        let mut current: VfsNodeRef = self;
+        while let Some(parent) = current.parent() {
+            current = parent;
+        }
+        current
     }
 }
 
@@ -163,6 +172,33 @@ impl VfsNodeOps for DirNode {
         } else {
             self.remove_node(name)
         }
+    }
+
+    fn rename(&self, old: &str, new: &str) -> VfsResult {
+        log::info!("rename at ramfs: {} -> {}", old, new);
+        let node = self.this.upgrade().expect("this node not found");
+        let old_node = node.clone().lookup(old)?;
+
+        let mut split = new.rsplit('/');
+        let new_file_name = split.next().expect("invalid path");
+        let new_parent = split.remainder().expect("invalid path");
+
+        let root = node.clone().get_root();
+        let new_parent_node = root.clone().lookup(new_parent)?;
+
+        log::info!(
+            "old {:p}, new {:p}",
+            Arc::as_ptr(&node),
+            Arc::as_ptr(&new_parent_node)
+        );
+        node.as_any()
+            .downcast_ref::<DirNode>()
+            .expect("not a dir node")
+            .children
+            .write()
+            .insert(new_file_name.into(), old_node);
+
+        Ok(())
     }
 
     axfs_vfs::impl_vfs_dir_default! {}
